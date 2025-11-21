@@ -1,0 +1,16 @@
+{
+    "base_mesh": "input_mesh",
+    "ref_mesh": "refer_mesh",
+    "camera_eye": [ 2.5, 0.0, -2.5 ],
+    "camera_up": [ 0.0, 1.0, 0.0 ],
+    "random_textures": false,
+    "iter": 1000,
+    "save_interval": 100,
+    "texture_res": [ 2048, 2048 ],
+    "train_res": 1024,
+    "batch": 8,
+    "learning_rate": 0.03,
+    "skip_train": ["position", "displacement"],
+    "min_roughness" : 0.25,
+    "out_dir" : "output" 
+}

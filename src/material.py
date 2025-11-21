@@ -37,7 +37,7 @@ def load_mtl(fn, clear_ks=True):
             materials += [material]
         elif materials:
             if 'bsdf' in prefix or 'map_kd' in prefix or 'map_ks' in prefix or 'bump' in prefix:
-                material[prefix] = data[0]
+                material[prefix] = data[-1]
             else:
                 material[prefix] = torch.tensor(tuple(float(d) for d in data), dtype=torch.float32, device='cuda')
 
@@ -75,9 +75,9 @@ def save_mtl(fn, material):
         f.write('newmtl defaultMat\n')
         if material is not None:
             f.write('bsdf   %s\n' % material['bsdf'])
-            f.write('map_kd texture_kd.png\n')
+            f.write('map_Kd texture_kd.png\n')
             texture.save_texture2D(os.path.join(folder, 'texture_kd.png'), texture.rgb_to_srgb(material['kd']))
-            f.write('map_ks texture_ks.png\n')
+            f.write('map_Ks texture_ks.png\n')
             texture.save_texture2D(os.path.join(folder, 'texture_ks.png'), material['ks'])
             f.write('bump texture_n.png\n')
             texture.save_texture2D(os.path.join(folder, 'texture_n.png'), material['normal'], lambda_fn=lambda x:(x+1)*0.5)
@@ -119,7 +119,7 @@ def merge_materials(materials, texcoords, tfaces, mfaces):
             max_res = np.maximum(max_res, tex_res) if max_res is not None else tex_res
     
     # Compute size of compund texture and round up to nearest PoT
-    full_res = 2**np.ceil(np.log2(max_res * np.array([1, len(materials)]))).astype(np.int)
+    full_res = 2**np.ceil(np.log2(max_res * np.array([1, len(materials)]))).astype(np.int64)
 
     # Normalize texture resolution across all materials & combine into a single large texture
     for tex in textures:

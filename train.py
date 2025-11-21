@@ -231,7 +231,7 @@ def optimize_mesh(
     img_loss_vec = []
     lap_loss_vec = []
     iter_dur_vec = []
-    glctx = dr.RasterizeGLContext()
+    glctx = dr.RasterizeCudaContext()
     for it in range(FLAGS.iter+1):
         # ==============================================================================================
         #  Display / save outputs. Do it before training so we get initial meshes
