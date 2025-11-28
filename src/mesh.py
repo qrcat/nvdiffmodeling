@@ -18,12 +18,17 @@ from . import texture
 ######################################################################################
 class Mesh:
     def __init__(self, v_pos=None, t_pos_idx=None, v_nrm=None, t_nrm_idx=None, v_tex=None, t_tex_idx=None, v_tng=None, t_tng_idx=None, 
-    v_weights=None, bone_mtx=None, material=None, base=None):
+    v_weights=None, bone_mtx=None, material=None, base=None, v_kd=None, v_ks=None, f_kd=None, f_ks=None):
         self.v_pos = v_pos
         self.v_weights = v_weights
         self.v_nrm = v_nrm
         self.v_tex = v_tex
         self.v_tng = v_tng
+        # we define the optional vert materials and face materials
+        self.v_kd = v_kd
+        self.v_ks = v_ks
+        self.f_kd = f_kd
+        self.f_ks = f_ks
         self.t_pos_idx = t_pos_idx
         self.t_nrm_idx = t_nrm_idx
         self.t_tex_idx = t_tex_idx
@@ -39,6 +44,14 @@ class Mesh:
             self.v_pos = other.v_pos
         if self.v_weights is None:
             self.v_weights = other.v_weights
+        if self.v_kd is None:
+            self.v_kd = other.v_kd
+        if self.v_ks is None:
+            self.v_ks = other.v_ks
+        if self.f_kd is None:
+            self.f_kd = other.f_kd
+        if self.f_ks is None:
+            self.f_ks = other.f_ks
         if self.t_pos_idx is None:
             self.t_pos_idx = other.t_pos_idx
         if self.v_nrm is None:
@@ -67,6 +80,14 @@ class Mesh:
             out.v_pos = out.v_pos.clone()
         if out.v_weights is not None:
             out.v_weights = out.v_weights.clone()
+        if out.v_kd is not None:
+            out.v_kd = out.v_kd.clone()
+        if out.v_ks is not None:
+            out.v_ks = out.v_ks.clone()
+        if out.f_kd is not None:
+            out.f_kd = out.f_kd.clone()
+        if out.f_ks is not None:
+            out.f_ks = out.f_ks.clone()
         if out.t_pos_idx is not None:
             out.t_pos_idx = out.t_pos_idx.clone()
         if out.v_nrm is not None:
