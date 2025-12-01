@@ -28,6 +28,13 @@ from src.mesh import Mesh
 
 RADIUS = 3.5
 
+RENDER_CALL = {
+    'uv': render.render_mesh,
+    'vert': render.render_mesh_vert_wise,
+    'face': render.render_mesh_face_wise,
+}
+
+
 # Enable to debug back-prop anomalies
 # torch.autograd.set_detect_anomaly(True)
 
@@ -62,6 +69,51 @@ def createLoss(FLAGS):
 ###############################################################################
 # Main shape fitter function / optimization loop
 ###############################################################################
+
+
+def create_materials(FLAGS: argparse.Namespace, mesh: Mesh):
+    kd_map_opt, ks_map_opt, v_kd, v_ks, f_kd, f_ks = None, None, None, None, None, None
+    if FLAGS.random_textures:
+        if FLAGS.mode == 'uv':
+            if FLAGS.layers > 1:
+                kd_map_opt = texture.create_trainable(np.random.uniform(size=FLAGS.texture_res + [4], low=0.0, high=1.0), FLAGS.texture_res, not FLAGS.custom_mip)
+            else:
+                kd_map_opt = texture.create_trainable(np.random.uniform(size=FLAGS.texture_res + [3], low=0.0, high=1.0), FLAGS.texture_res, not FLAGS.custom_mip)
+
+            ksR = np.random.uniform(size=FLAGS.texture_res + [1], low=0.0, high=0.01)
+            ksG = np.random.uniform(size=FLAGS.texture_res + [1], low=FLAGS.min_roughness, high=1.0)
+            ksB = np.random.uniform(size=FLAGS.texture_res + [1], low=0.0, high=1.0)
+            ks_map_opt = texture.create_trainable(np.concatenate((ksR, ksG, ksB), axis=2), FLAGS.texture_res, not FLAGS.custom_mip)
+        elif FLAGS.mode == 'vert':
+            v_kd = torch.nn.Parameter(torch.rand(mesh.v_pos.shape, device='cuda'))
+            v_ksR = torch.nn.Parameter(torch.rand(mesh.v_pos.shape[0], device='cuda') * 0.01 + 0.0)
+            v_ksG = torch.nn.Parameter(torch.rand(mesh.v_pos.shape[0], device='cuda') * (1.0 - FLAGS.min_roughness) + FLAGS.min_roughness)
+            v_ksB = torch.nn.Parameter(torch.rand(mesh.v_pos.shape[0], device='cuda') * 1.0 + 0.0)
+            v_ks = torch.stack((v_ksR, v_ksG, v_ksB), dim=1)
+        elif FLAGS.mode == 'face':
+            f_kd = torch.nn.Parameter(torch.rand(mesh.t_pos_idx.shape, device='cuda'))
+            f_ksR = torch.nn.Parameter(torch.rand(mesh.t_pos_idx.shape[0], device='cuda') * 0.01 + 0.0)
+            f_ksG = torch.nn.Parameter(torch.rand(mesh.t_pos_idx.shape[0], device='cuda') * (1.0 - FLAGS.min_roughness) + FLAGS.min_roughness)
+            f_ksB = torch.nn.Parameter(torch.rand(mesh.t_pos_idx.shape[0], device='cuda') * 1.0 + 0.0)
+            f_ks = torch.stack((f_ksR, f_ksG, f_ksB), dim=1)
+    else:
+        if FLAGS.mode == 'uv':
+            if FLAGS.layers > 1:
+                kd_map_opt = texture.create_trainable(np.full(FLAGS.texture_res + [4], 0.5), FLAGS.texture_res, not FLAGS.custom_mip)
+            else:
+                kd_map_opt = texture.create_trainable(np.full(FLAGS.texture_res + [3], 0.5), FLAGS.texture_res, not FLAGS.custom_mip)
+            ks_map_opt = texture.create_trainable(np.array([0, FLAGS.min_roughness, 0]), FLAGS.texture_res, not FLAGS.custom_mip)
+        elif FLAGS.mode == 'vert':
+            v_kd = torch.nn.Parameter(torch.full(mesh.v_pos.shape, 0.5, device='cuda'))
+            v_ks = torch.nn.Parameter(torch.ones(mesh.v_pos.shape, device='cuda'))
+        elif FLAGS.mode == 'face':
+            f_kd = torch.nn.Parameter(torch.full(mesh.t_pos_idx.shape, 0.5, device='cuda'))
+            f_ks = torch.nn.Parameter(torch.ones(mesh.t_pos_idx.shape, device='cuda'))
+        else:
+            raise Exception(f"Invalid mode {FLAGS.mode}")
+        
+        return kd_map_opt, ks_map_opt, v_kd, v_ks, f_kd, f_ks
+
 
 def optimize_mesh(
     FLAGS,
@@ -110,43 +162,10 @@ def optimize_mesh(
     v_pos_opt = normalized_base_mesh.v_pos.clone().detach().requires_grad_(True)
 
     # Trainable normal map, initialize to (0,0,1) & make sure normals are always in positive hemisphere
-    if FLAGS.random_textures:
-        normal_map_opt = texture.create_trainable(np.array([0, 0, 1]), FLAGS.texture_res, not FLAGS.custom_mip)
-    else:
-        if 'normal' not in ref_mesh.material or 'normal' in FLAGS.skip_train:
-            normal_map_opt = texture.create_trainable(np.array([0, 0, 1]), FLAGS.texture_res, not FLAGS.custom_mip)
-        else:
-            normal_map_opt = texture.create_trainable(ref_mesh.material['normal'], FLAGS.texture_res, not FLAGS.custom_mip)
+    normal_map_opt = texture.create_trainable(np.array([0, 0, 1]), FLAGS.texture_res, not FLAGS.custom_mip)
     
     # Setup Kd, Ks albedo and specular textures
-    kd_map_opt, ks_map_opt, v_kd, v_ks, f_kd, f_ks = None, None, None, None, None, None
-    if FLAGS.random_textures and FLAGS.mode == 'uv':
-            if FLAGS.layers > 1:
-                kd_map_opt = texture.create_trainable(np.random.uniform(size=FLAGS.texture_res + [4], low=0.0, high=1.0), FLAGS.texture_res, not FLAGS.custom_mip)
-            else:
-                kd_map_opt = texture.create_trainable(np.random.uniform(size=FLAGS.texture_res + [3], low=0.0, high=1.0), FLAGS.texture_res, not FLAGS.custom_mip)
-
-            ksR = np.random.uniform(size=FLAGS.texture_res + [1], low=0.0, high=0.01)
-            ksG = np.random.uniform(size=FLAGS.texture_res + [1], low=FLAGS.min_roughness, high=1.0)
-            ksB = np.random.uniform(size=FLAGS.texture_res + [1], low=0.0, high=1.0)
-            ks_map_opt = texture.create_trainable(np.concatenate((ksR, ksG, ksB), axis=2), FLAGS.texture_res, not FLAGS.custom_mip)
-    else:
-        if FLAGS.mode == 'uv':
-            if FLAGS.layers > 1:
-                kd_map_opt = texture.create_trainable(np.random.uniform(size=FLAGS.texture_res + [4], low=0.0, high=1.0), FLAGS.texture_res, not FLAGS.custom_mip)
-            else:
-                kd_map_opt = texture.create_trainable(np.random.uniform(size=FLAGS.texture_res + [3], low=0.0, high=1.0), FLAGS.texture_res, not FLAGS.custom_mip)
-            ks_map_opt = texture.create_trainable(np.array([0, FLAGS.min_roughness, 0]), FLAGS.texture_res, not FLAGS.custom_mip)
-            # kd_map_opt = texture.create_trainable(ref_mesh.material['kd'], FLAGS.texture_res, not FLAGS.custom_mip)
-            # ks_map_opt = texture.create_trainable(ref_mesh.material['ks'], FLAGS.texture_res, not FLAGS.custom_mip)
-        elif FLAGS.mode == 'vert':
-            v_kd = torch.nn.Parameter(torch.rand(normalized_base_mesh.v_pos.shape, device='cuda'))
-            v_ks = torch.nn.Parameter(torch.ones(normalized_base_mesh.v_pos.shape, device='cuda'))
-        elif FLAGS.mode == 'face':
-            f_kd = torch.nn.Parameter(torch.rand(normalized_base_mesh.t_pos_idx.shape, device='cuda'))
-            f_ks = torch.nn.Parameter(torch.ones(normalized_base_mesh.t_pos_idx.shape, device='cuda'))
-        else:
-            raise Exception(f"Invalid mode {FLAGS.mode}")
+    kd_map_opt, ks_map_opt, v_kd, v_ks, f_kd, f_ks = create_materials(FLAGS, normalized_base_mesh)
         
     # Trainable displacement map
     displacement_map_var = None
@@ -178,7 +197,7 @@ def optimize_mesh(
     # ==============================================================================================
     #  Setup material for optimized mesh
     # ==============================================================================================
-    ref_mesh.material['bsdf'] = 'diffuse'
+    if FLAGS.type is not None: ref_mesh.material['bsdf'] = FLAGS.type
     opt_material = {
         'bsdf'   : ref_mesh.material['bsdf'],
         'kd'     : kd_map_opt,
@@ -286,25 +305,12 @@ def optimize_mesh(
                 # Render
                 if FLAGS.subdivision > 0:
                     _opt_base   = mesh.center_by_reference(opt_base_mesh.eval(params), ref_mesh_aabb, mesh_scale)
-                    if FLAGS.mode == 'uv':
-                        img_base = render.render_mesh(glctx, _opt_base, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
-                            num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
-                    elif FLAGS.mode == 'vert':
-                        img_base = render.render_mesh_vert_wise(glctx, _opt_base, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
-                            num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
-                    elif FLAGS.mode == 'face':
-                        img_base = render.render_mesh_face_wise(glctx, _opt_base, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
-                            num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
+                    
+                    img_base = RENDER_CALL[FLAGS.mode](glctx, _opt_base, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
+                        num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
                     img_base = util.scale_img_nhwc(img_base, [FLAGS.display_res, FLAGS.display_res])
-                if FLAGS.mode == 'uv':
-                    img_opt = render.render_mesh(glctx, _opt_detail, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
-                        num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
-                elif FLAGS.mode == 'vert':
-                    img_opt = render.render_mesh_vert_wise(glctx, _opt_detail, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
-                        num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
-                elif FLAGS.mode == 'face':
-                    img_opt = render.render_mesh_face_wise(glctx, _opt_detail, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
-                        num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
+                img_opt = RENDER_CALL[FLAGS.mode](glctx, _opt_detail, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
+                    num_layers=FLAGS.layers, background=background, min_roughness=FLAGS.min_roughness)
                 img_ref = render.render_mesh(glctx, _opt_ref, a_mvp, a_campos, a_lightpos, FLAGS.light_power, FLAGS.display_res, 
                     num_layers=1, spp=FLAGS.spp, background=background, min_roughness=FLAGS.min_roughness)
 
@@ -379,19 +385,10 @@ def optimize_mesh(
         # ==============================================================================================
         #  Render the trainable mesh
         # ==============================================================================================
-        if FLAGS.mode == 'uv':
-            color_opt = render.render_mesh(glctx, _opt_detail, mvp, campos, lightpos, FLAGS.light_power, iter_res, 
-                spp=iter_spp, num_layers=FLAGS.layers, msaa=True , background=randomBgColor, 
-                min_roughness=FLAGS.min_roughness)
-        elif FLAGS.mode == 'vert':
-            color_opt = render.render_mesh_vert_wise(glctx, _opt_detail, mvp, campos, lightpos, FLAGS.light_power, iter_res, 
-                spp=iter_spp, num_layers=FLAGS.layers, msaa=True , background=randomBgColor, 
-                min_roughness=FLAGS.min_roughness)
-        elif FLAGS.mode == 'face':
-            color_opt = render.render_mesh_face_wise(glctx, _opt_detail, mvp, campos, lightpos, FLAGS.light_power, iter_res, 
-                spp=iter_spp, num_layers=FLAGS.layers, msaa=True , background=randomBgColor, 
-                min_roughness=FLAGS.min_roughness)
-
+        color_opt = RENDER_CALL[FLAGS.mode](glctx, _opt_detail, mvp, campos, lightpos, FLAGS.light_power, iter_res, 
+            spp=iter_spp, num_layers=FLAGS.layers, msaa=True , background=randomBgColor, 
+            min_roughness=FLAGS.min_roughness)
+        
         # ==============================================================================================
         #  Compute loss
         # ==============================================================================================
@@ -497,6 +494,7 @@ def main():
     parser.add_argument('--config', type=str, default=None, help='Config file')
     parser.add_argument('-rm', '--ref_mesh', type=str)
     parser.add_argument('-bm', '--base-mesh', type=str)
+    parser.add_argument('-tp', '--type', type=str, choices=['pbr', 'diffuse', 'normal'], default='diffuse')
     parser.add_argument('-md', '--mode', type=str, choices=['uv', 'vert', 'face'], default='face')
     
     FLAGS = parser.parse_args()
